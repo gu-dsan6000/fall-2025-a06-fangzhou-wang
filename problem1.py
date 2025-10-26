@@ -3,7 +3,7 @@
 
 import os, argparse, csv
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import regexp_extract, col, to_timestamp, rand
+from pyspark.sql.functions import regexp_extract, col, rand
 from pyspark.sql import functions as F
 
 def write_counts_csv(rows, path):
@@ -20,7 +20,6 @@ def write_sample_csv(rows, path):
         w = csv.writer(f)
         w.writerow(["log_entry", "log_level"])
         for log_entry, log_level in rows:
-            # 让 CSV 自带引号处理（避免逗号/引号问题）
             w.writerow([log_entry, log_level])
 
 def write_summary_txt(total_lines, lines_with_level, counts_rows, path):
@@ -45,7 +44,7 @@ def main():
     ap.add_argument("master", help="Spark master (e.g., local[*] or spark://<IP>:7077)")
     ap.add_argument("--net-id", required=True, help="Your net id (for app name tagging)")
     ap.add_argument("--input", required=True,
-                    help="Input base path (e.g., file:///.../data/sample or s3a://<bucket>/data/)")
+                    help="Input base path (e.g., file:///.../data/sample or s3a://<bucket>/data/raw)")
     ap.add_argument("--outdir", default="data/output", help="Output directory (default: data/output)")
     args = ap.parse_args()
 
@@ -54,8 +53,10 @@ def main():
              .appName(f"Problem1-LogLevel-{args.net_id}")
              .getOrCreate())
     spark.sparkContext.setLogLevel("WARN")
+    # 不解析时间戳，避免 ANSI DateTimeException
+    spark.conf.set("spark.sql.ansi.enabled", "false")
 
-    # 兼容用户传入 base 目录：我们在后面追加 application_*/*.log
+    # 兼容“基目录”传参：脚本里统一追加 application_*/*.log
     base = args.input.rstrip("/")
     input_glob = f"{base}/application_*/*.log"
 
@@ -66,23 +67,18 @@ def main():
         regexp_extract("value", r"(INFO|WARN|ERROR|DEBUG)", 1).alias("log_level"),
         regexp_extract("value", r"(INFO|WARN|ERROR|DEBUG)\s+([^:]+):", 2).alias("component"),
         F.col("value").alias("log_entry")
-    ).withColumn(
-        "timestamp", to_timestamp("timestamp_str", "yy/MM/dd HH:mm:ss")
     )
 
     total_lines = df.count()
     has_level = parsed.filter(col("log_level") != "").cache()
     lines_with_level = has_level.count()
 
-    # 级别统计（按数量降序）
     level_counts_df = has_level.groupBy("log_level").count().orderBy(F.desc("count"))
     counts_rows = [(r["log_level"], int(r["count"])) for r in level_counts_df.collect()]
 
-    # 随机样本 10 行
     sample_df = has_level.orderBy(rand()).limit(10).select("log_entry", "log_level")
     sample_rows = [(r["log_entry"], r["log_level"]) for r in sample_df.collect()]
 
-    # 写出三份产物为“单文件”
     counts_path  = os.path.join(args.outdir, "problem1_counts.csv")
     sample_path  = os.path.join(args.outdir, "problem1_sample.csv")
     summary_path = os.path.join(args.outdir, "problem1_summary.txt")

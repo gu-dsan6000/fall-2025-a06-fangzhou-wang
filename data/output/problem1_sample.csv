@@ -1,11 +1,11 @@
 log_entry,log_level
-17/03/29 10:03:25 INFO executor.Executor: Running task 16.0 in stage 6.0 (TID 117),INFO
-17/03/29 10:07:32 INFO netty.NettyBlockTransferService: Server created on 51182,INFO
-17/03/29 10:11:14 INFO executor.Executor: Running task 14.0 in stage 2.0 (TID 35),INFO
-"17/03/29 10:03:15 INFO Configuration.deprecation: mapred.task.id is deprecated. Instead, use mapreduce.task.attempt.id",INFO
-17/03/29 10:04:52 INFO broadcast.TorrentBroadcast: Started reading broadcast variable 2,INFO
-17/03/29 10:07:49 INFO storage.ShuffleBlockFetcherIterator: Started 0 remote fetches in 7 ms,INFO
-"17/03/29 10:02:41 INFO spark.SecurityManager: Changing modify acls to: yarn,curi",INFO
-"17/03/29 10:04:52 INFO storage.MemoryStore: Block broadcast_0 stored as values in memory (estimated size 281.6 KB, free 312.2 KB)",INFO
-17/03/29 10:04:57 INFO executor.CoarseGrainedExecutorBackend: Got assigned task 48,INFO
-17/03/29 10:11:14 INFO executor.CoarseGrainedExecutorBackend: Got assigned task 35,INFO
+"17/03/23 14:29:35 INFO BlockManagerInfo: Added broadcast_4_piece177 in memory on mesos-slave-17:49082 (size: 4.0 MB, free: 10.8 GB)",INFO
+17/06/06 21:31:05 INFO executor.Executor: Finished task 27.0 in stage 265.0 (TID 10627). 2569 bytes result sent to driver,INFO
+17/06/08 20:52:24 INFO executor.CoarseGrainedExecutorBackend: Got assigned task 468420,INFO
+17/06/09 17:32:10 INFO mapred.SparkHadoopMapRedUtil: attempt_201706091739_0307_m_000007_12282: Committed,INFO
+17/06/09 09:15:10 INFO storage.BlockManager: Found block rdd_144_30 locally,INFO
+17/06/08 19:15:27 INFO output.FileOutputCommitter: Saved output of task 'attempt_201706081923_3314_m_000038_132639' to hdfs://10.10.34.11:9000/pjhe/test/62/_temporary/0/task_201706081923_3314_m_000038,INFO
+17/02/01 15:19:54 INFO storage.ShuffleBlockFetcherIterator: Started 6 remote fetches in 2 ms,INFO
+"17/06/09 16:18:24 INFO python.PythonRunner: Times: total = 40, boot = 10, init = 30, finish = 0",INFO
+"17/06/08 20:47:49 INFO python.PythonRunner: Times: total = 39, boot = 27, init = 12, finish = 0",INFO
+"17/06/06 21:30:08 INFO storage.MemoryStore: Block rdd_78_24 stored as bytes in memory (estimated size 16.0 B, free 645.4 KB)",INFO
