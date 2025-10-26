@@ -53,10 +53,10 @@ def main():
              .appName(f"Problem1-LogLevel-{args.net_id}")
              .getOrCreate())
     spark.sparkContext.setLogLevel("WARN")
-    # 不解析时间戳，避免 ANSI DateTimeException
+    # Do not parse timestamps to avoid ANSI DateTimeException
     spark.conf.set("spark.sql.ansi.enabled", "false")
 
-    # 兼容“基目录”传参：脚本里统一追加 application_*/*.log
+    # Compatibility with "base directory" parameter passing: Uniformly append application_*/*.log in the script
     base = args.input.rstrip("/")
     input_glob = f"{base}/application_*/*.log"
 

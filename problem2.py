@@ -34,7 +34,6 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# seaborn 非必需，有则更美观
 try:
     import seaborn as sns
     HAS_SNS = True
@@ -56,9 +55,9 @@ def build_spark(master: str, app_name: str) -> SparkSession:
         SparkSession.builder
         .master(master)
         .appName(app_name)
-        # 递归读取 application_* 子目录
+        # Recursively read the application * subdirectory
         .config("spark.hadoop.mapreduce.input.fileinputformat.input.dir.recursive", "true")
-        # 关闭 ANSI 严格校验，避免个别函数在 3.x/2.x 细微差异
+        # Disable ANSI strict validation to avoid minor differences in individual functions between 3.x and 2.x
         .config("spark.sql.ansi.enabled", "false")
         .getOrCreate()
     )
@@ -76,20 +75,20 @@ def parse_logs_to_timeline(spark: SparkSession, base_dir: str):
       - app_number (<app_number>)
     聚合得到每个 application 的 start_time / end_time
     """
-    # 精确通配，避免误把目录当文件
+    # Precise matching to avoid mistaking directories for files
     glob_path = f"{base_dir}/application_*/container_*.log"
 
-    # 逐行读取文本，同时保留文件路径
+    # Read the text line by line while retaining the file path
     df = spark.read.text(glob_path).withColumn("file_path", F.input_file_name())
 
-    # 日志行首时间戳格式样例： 17/03/29 10:04:41
+    # Sample of the timestamp format at the beginning of a log line: 17/03/29 10:04:41
     parsed = (
         df.select(
-            # 行首时间戳
+            # Line header timestamp
             F.regexp_extract(F.col("value"),
                              r"^(\d{2}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2})",
                              1).alias("timestamp_str"),
-            # 从文件路径抽 application_id / cluster_id / app_number
+            # Extract application_id/cluster_id/app_number from the file path
             F.regexp_extract(F.col("file_path"),
                              r"(application_\d+_\d+)",
                              1).alias("application_id"),
@@ -101,13 +100,14 @@ def parse_logs_to_timeline(spark: SparkSession, base_dir: str):
                              1).alias("app_number"),
         )
         .filter(F.col("timestamp_str") != "")
-        # 兼容性最好的时间解析
+        
+        # Analysis of the Best Compatible Time
         .withColumn("timestamp", F.to_timestamp(F.col("timestamp_str"), "yy/MM/dd HH:mm:ss"))
         .filter(F.col("timestamp").isNotNull())
         .filter(F.col("application_id") != "")
     )
 
-    # 每个 application 的起止时间
+    # The start and end times of each application
     timeline = (
         parsed.groupBy("cluster_id", "application_id", "app_number")
         .agg(
@@ -125,10 +125,9 @@ def write_outputs_and_plots(timeline_pdf: pd.DataFrame, outdir: str):
     # --- CSV 1: timeline ---
     tl = timeline_pdf.copy()
     if tl.empty:
-        # 兜底空数据也写出空文件，保证 5 个产物存在
         timeline_csv = os.path.join(outdir, "problem2_timeline.csv")
         tl.to_csv(timeline_csv, index=False)
-        # 写空的 cluster summary / stats，并跳过图表
+        # Write the empty cluster summary/stats and skip the chart
         cluster_summary = pd.DataFrame(columns=["cluster_id", "num_applications",
                                                 "cluster_first_app", "cluster_last_app"])
         cluster_summary.to_csv(os.path.join(outdir, "problem2_cluster_summary.csv"), index=False)
@@ -185,7 +184,7 @@ def write_outputs_and_plots(timeline_pdf: pd.DataFrame, outdir: str):
     plt.ylabel("Number of Applications")
 
     ax = plt.gca()
-    # 顶部标注数值
+    # Number marked at the top
     for p in getattr(ax, "patches", []):
         try:
             h = p.get_height()
@@ -211,11 +210,12 @@ def write_outputs_and_plots(timeline_pdf: pd.DataFrame, outdir: str):
 
             plt.figure()
             if HAS_SNS:
-                # 直方图 + KDE；数量少时 KDE 可能不稳定，但依然可视
+                # Histogram + KDE; When the quantity is small, the KDE may be unstable, but it is still visible
                 sns.histplot(tl_top["duration_sec"], kde=True)
             else:
                 plt.hist(tl_top["duration_sec"], bins=30, alpha=0.75)
-            # 时长分布通常偏态，使用对数坐标
+            #The duration distribution is usually skewed and logarithmic coordinates are used
+            
             plt.xscale("log")
             plt.title(f"Job Duration Distribution (cluster {top_cluster}, n={len(tl_top)})")
             plt.xlabel("Duration (seconds, log scale)")
@@ -224,7 +224,7 @@ def write_outputs_and_plots(timeline_pdf: pd.DataFrame, outdir: str):
             plt.savefig(dens_png, dpi=150)
             plt.close()
         else:
-            # 若 top cluster 无数据，生成一张空图占位
+            # If there is no data in the top cluster, generate an empty image to occupy the position
             plt.figure()
             plt.title("No durations available")
             plt.savefig(dens_png, dpi=150)
@@ -243,7 +243,7 @@ def regenerate_from_csv(outdir: str):
     timeline_csv = os.path.join(outdir, "problem2_timeline.csv")
     if not os.path.exists(timeline_csv):
         raise FileNotFoundError(
-            f"--skip-spark 需要先存在 {timeline_csv}。请先跑一次 Spark 再使用 --skip-spark。"
+            f"--skip-spark should exist {timeline_csv}. please run Spark first, then use --skip-spark。"
         )
     tl = pd.read_csv(timeline_csv)
     if not tl.empty:
@@ -265,7 +265,7 @@ def main():
                         help="Regenerate plots & stats from existing CSVs without Spark")
     args = parser.parse_args()
 
-    # 默认输入指向 sample
+    # The default input points to sample
     if args.input is None:
         args.input = f"file://{os.getcwd()}/data/sample"
 
