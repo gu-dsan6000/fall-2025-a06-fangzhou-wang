@@ -140,7 +140,7 @@ Master view shows 3 workers, 6 cores used, executor memory, and the running/comp
 
 ### Bar chart
 
-![Bar chart](problem2_bar_chart.png)
+![Bar chart](data/output/problem2_bar_chart.png)
 
 This bar chart illustrates the distribution of Spark applications across clusters.
 It reveals an extreme imbalance: Cluster 1485248649253 processed 181 applications, dwarfing all others (the next highest cluster handled only 8).
@@ -148,7 +148,7 @@ This dominance highlights a centralized workload pattern, where nearly all compu
 
 ### Density chart
 
-![Density chart](problem2_density_plot.png)
+![Density chart](data/output/problem2_density_plot.png)
 
 The second figure shows the distribution of job durations (in seconds, log-scaled) for the dominant cluster 1485248649253.
 Most jobs complete within 10²–10³ seconds (a few minutes), but there are a few long-running jobs extending past 10⁴ seconds (several hours), creating a long-tail pattern. This shape is typical of mixed workloads: many short preprocessing or data-shuffling jobs alongside fewer heavy aggregation tasks.
