@@ -1,14 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+Problem 2: Cluster Usage Analysis
+
+Outputs (to --outdir, default data/output):
+1) problem2_timeline.csv
+2) problem2_cluster_summary.csv
+3) problem2_stats.txt
+4) problem2_bar_chart.png
+5) problem2_density_plot.png
+
+Usage:
+# Local quick run on sample folder
+uv run python problem2.py local[*] \
+  --net-id YOUR-NET-ID \
+  --input "file://$(pwd)/data/sample" \
+  --outdir data/output
+
+# Full Spark cluster
+uv run python problem2.py spark://$MASTER_PRIVATE_IP:7077 \
+  --net-id YOUR-NET-ID \
+  --input "hdfs:///path/to/SparkLogsRootOrLocalMount" \
+  --outdir data/output
+
+# Regenerate visuals from existing CSVs (no Spark)
+uv run python problem2.py --skip-spark --outdir data/output
+"""
+
 import argparse
 import os
 from pathlib import Path
-
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# seaborn 可选（若环境没有会自动降级到 matplotlib）
+# seaborn 非必需，有则更美观
 try:
     import seaborn as sns
     HAS_SNS = True
@@ -16,119 +42,138 @@ except Exception:
     HAS_SNS = False
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import (
-    regexp_extract, col, try_to_timestamp,
-    min as smin, max as smax, countDistinct, count, lit
-)
+from pyspark.sql import functions as F
 
+
+# ---------- utils ----------
 
 def ensure_outdir(outdir: str):
     Path(outdir).mkdir(parents=True, exist_ok=True)
 
 
 def build_spark(master: str, app_name: str) -> SparkSession:
-    spark = (
+    return (
         SparkSession.builder
         .master(master)
         .appName(app_name)
+        # 递归读取 application_* 子目录
         .config("spark.hadoop.mapreduce.input.fileinputformat.input.dir.recursive", "true")
+        # 关闭 ANSI 严格校验，避免个别函数在 3.x/2.x 细微差异
         .config("spark.sql.ansi.enabled", "false")
         .getOrCreate()
     )
-    return spark
 
 
-def parse_logs_to_timeline(spark: SparkSession, base: str):
+# ---------- core logic ----------
+
+def parse_logs_to_timeline(spark: SparkSession, base_dir: str):
     """
-    读取 {base}/application_*/*.log，解析时间戳、application_id、cluster_id、app_number，
-    生成每个 application 的 start_time / end_time（按日志时间最小/最大值）
+    读取 {base_dir}/application_*/container_*.log
+    抽取：
+      - timestamp_str -> to_timestamp
+      - application_id (application_<cluster_id>_<app_number>)
+      - cluster_id (<cluster_id>)
+      - app_number (<app_number>)
+    聚合得到每个 application 的 start_time / end_time
     """
-    glob_path = f"{base}/application_*/*.log"
-    df = spark.read.text(glob_path)
+    # 精确通配，避免误把目录当文件
+    glob_path = f"{base_dir}/application_*/container_*.log"
 
-    # 从文件路径提取 application_id、cluster_id、app_number
-    # 路径形如：.../application_1485248649253_0052/container_...log
-    df = df.withColumn("file_path", col("value")*0 + lit(""))  # 占位，防 Analyzer 合并；稍后替换
-    # 重新读取并附加 input_file_name (避免上面 trick)
-    from pyspark.sql.functions import input_file_name
-    df = spark.read.text(glob_path).withColumn("file_path", input_file_name())
+    # 逐行读取文本，同时保留文件路径
+    df = spark.read.text(glob_path).withColumn("file_path", F.input_file_name())
 
+    # 日志行首时间戳格式样例： 17/03/29 10:04:41
     parsed = (
         df.select(
-            # 解析行首时间戳： 17/03/29 10:04:41
-            regexp_extract("value", r"^(\d{2}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})", 1).alias("timestamp_str"),
-            # 应用与集群信息
-            regexp_extract("file_path", r"(application_\d+_\d+)", 1).alias("application_id"),
-            regexp_extract("file_path", r"application_(\d+)_\d+", 1).alias("cluster_id"),
-            regexp_extract("file_path", r"application_\d+_(\d+)", 1).alias("app_number"),
+            # 行首时间戳
+            F.regexp_extract(F.col("value"),
+                             r"^(\d{2}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2})",
+                             1).alias("timestamp_str"),
+            # 从文件路径抽 application_id / cluster_id / app_number
+            F.regexp_extract(F.col("file_path"),
+                             r"(application_\d+_\d+)",
+                             1).alias("application_id"),
+            F.regexp_extract(F.col("file_path"),
+                             r"application_(\d+)_\d+",
+                             1).alias("cluster_id"),
+            F.regexp_extract(F.col("file_path"),
+                             r"application_\d+_(\d+)",
+                             1).alias("app_number"),
         )
-        .withColumn("timestamp", try_to_timestamp(col("timestamp_str"), "yy/MM/dd HH:mm:ss"))
-        .filter((col("application_id") != "") & col("timestamp").isNotNull())
+        .filter(F.col("timestamp_str") != "")
+        # 兼容性最好的时间解析
+        .withColumn("timestamp", F.to_timestamp(F.col("timestamp_str"), "yy/MM/dd HH:mm:ss"))
+        .filter(F.col("timestamp").isNotNull())
+        .filter(F.col("application_id") != "")
     )
 
-    # 对每个 application 聚合得到 start_time / end_time
+    # 每个 application 的起止时间
     timeline = (
         parsed.groupBy("cluster_id", "application_id", "app_number")
         .agg(
-            smin("timestamp").alias("start_time"),
-            smax("timestamp").alias("end_time"),
+            F.min("timestamp").alias("start_time"),
+            F.max("timestamp").alias("end_time"),
         )
         .orderBy("cluster_id", "app_number")
     )
-
     return timeline
 
 
 def write_outputs_and_plots(timeline_pdf: pd.DataFrame, outdir: str):
-    """
-    根据时间线 DataFrame 生成：
-      1) problem2_timeline.csv
-      2) problem2_cluster_summary.csv
-      3) problem2_stats.txt
-      4) problem2_bar_chart.png
-      5) problem2_density_plot.png
-    """
     ensure_outdir(outdir)
 
-    # 1) timeline.csv
-    timeline_csv = os.path.join(outdir, "problem2_timeline.csv")
-    # 规范列顺序/类型
+    # --- CSV 1: timeline ---
     tl = timeline_pdf.copy()
+    if tl.empty:
+        # 兜底空数据也写出空文件，保证 5 个产物存在
+        timeline_csv = os.path.join(outdir, "problem2_timeline.csv")
+        tl.to_csv(timeline_csv, index=False)
+        # 写空的 cluster summary / stats，并跳过图表
+        cluster_summary = pd.DataFrame(columns=["cluster_id", "num_applications",
+                                                "cluster_first_app", "cluster_last_app"])
+        cluster_summary.to_csv(os.path.join(outdir, "problem2_cluster_summary.csv"), index=False)
+        with open(os.path.join(outdir, "problem2_stats.txt"), "w", encoding="utf-8") as f:
+            f.write("Total unique clusters: 0\nTotal applications: 0\nAverage applications per cluster: 0.00\n")
+        return
+
     for c in ["start_time", "end_time"]:
         tl[c] = pd.to_datetime(tl[c])
+
     tl = tl[["cluster_id", "application_id", "app_number", "start_time", "end_time"]]
+    timeline_csv = os.path.join(outdir, "problem2_timeline.csv")
     tl.to_csv(timeline_csv, index=False)
 
-    # 2) cluster_summary.csv
+    # --- CSV 2: cluster summary ---
     cluster_summary = (
         tl.groupby("cluster_id", as_index=False)
           .agg(num_applications=("application_id", "nunique"),
                cluster_first_app=("start_time", "min"),
                cluster_last_app=("end_time", "max"))
-          .sort_values("num_applications", ascending=False)
+          .sort_values(["num_applications", "cluster_id"], ascending=[False, True])
     )
     cluster_summary_csv = os.path.join(outdir, "problem2_cluster_summary.csv")
     cluster_summary.to_csv(cluster_summary_csv, index=False)
 
-    # 3) stats.txt
+    # --- TXT 3: stats ---
     stats_txt = os.path.join(outdir, "problem2_stats.txt")
     total_clusters = cluster_summary.shape[0]
     total_apps = tl["application_id"].nunique()
     avg_apps = total_apps / total_clusters if total_clusters > 0 else 0.0
 
-    lines = []
-    lines.append(f"Total unique clusters: {total_clusters}")
-    lines.append(f"Total applications: {total_apps}")
-    lines.append(f"Average applications per cluster: {avg_apps:.2f}")
-    lines.append("")
-    lines.append("Most heavily used clusters:")
+    lines = [
+        f"Total unique clusters: {total_clusters}",
+        f"Total applications: {total_apps}",
+        f"Average applications per cluster: {avg_apps:.2f}",
+        "",
+        "Most heavily used clusters:",
+    ]
     for _, row in cluster_summary.head(10).iterrows():
         lines.append(f"  Cluster {row['cluster_id']}: {int(row['num_applications'])} applications")
 
     with open(stats_txt, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    # 4) Bar chart: apps per cluster
+    # --- PNG 4: bar chart (apps per cluster) ---
     bar_png = os.path.join(outdir, "problem2_bar_chart.png")
     plt.figure()
     if HAS_SNS:
@@ -139,70 +184,71 @@ def write_outputs_and_plots(timeline_pdf: pd.DataFrame, outdir: str):
     plt.xlabel("Cluster ID")
     plt.ylabel("Number of Applications")
 
-    # 在柱子上方标注数值
     ax = plt.gca()
-    for p in ax.patches:
+    # 顶部标注数值
+    for p in getattr(ax, "patches", []):
         try:
-            height = p.get_height()
-            ax.annotate(f"{int(height)}", (p.get_x() + p.get_width()/2, height),
-                        ha='center', va='bottom', fontsize=9, rotation=0, xytext=(0,3), textcoords='offset points')
+            h = p.get_height()
+            ax.annotate(f"{int(h)}",
+                        (p.get_x() + p.get_width()/2, h),
+                        ha='center', va='bottom', fontsize=9,
+                        xytext=(0, 3), textcoords='offset points')
         except Exception:
             pass
+
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     plt.savefig(bar_png, dpi=150)
     plt.close()
 
-    # 5) Density plot（最大应用数的集群）: 作业时长分布（对数x轴）
+    # --- PNG 5: density (largest cluster durations) ---
     dens_png = os.path.join(outdir, "problem2_density_plot.png")
-    if total_apps > 0:
-        # 找 app 最多的集群
+    if not cluster_summary.empty:
         top_cluster = cluster_summary.iloc[0]["cluster_id"]
         tl_top = tl[tl["cluster_id"] == top_cluster].copy()
-        # 计算持续时间（秒）
-        tl_top["duration_sec"] = (tl_top["end_time"] - tl_top["start_time"]).dt.total_seconds().clip(lower=1)
+        if not tl_top.empty:
+            tl_top["duration_sec"] = (tl_top["end_time"] - tl_top["start_time"]).dt.total_seconds().clip(lower=1)
 
-        plt.figure()
-        if HAS_SNS:
-            sns.histplot(tl_top["duration_sec"], kde=True)
+            plt.figure()
+            if HAS_SNS:
+                # 直方图 + KDE；数量少时 KDE 可能不稳定，但依然可视
+                sns.histplot(tl_top["duration_sec"], kde=True)
+            else:
+                plt.hist(tl_top["duration_sec"], bins=30, alpha=0.75)
+            # 时长分布通常偏态，使用对数坐标
+            plt.xscale("log")
+            plt.title(f"Job Duration Distribution (cluster {top_cluster}, n={len(tl_top)})")
+            plt.xlabel("Duration (seconds, log scale)")
+            plt.ylabel("Count")
+            plt.tight_layout()
+            plt.savefig(dens_png, dpi=150)
+            plt.close()
         else:
-            # matplotlib 直方图（无 KDE）
-            plt.hist(tl_top["duration_sec"], bins=30, alpha=0.7)
-        plt.xscale("log")
-        plt.title(f"Job Duration Distribution (cluster {top_cluster}, n={len(tl_top)})")
-        plt.xlabel("Duration (seconds, log scale)")
-        plt.ylabel("Count")
-        plt.tight_layout()
-        plt.savefig(dens_png, dpi=150)
-        plt.close()
+            # 若 top cluster 无数据，生成一张空图占位
+            plt.figure()
+            plt.title("No durations available")
+            plt.savefig(dens_png, dpi=150)
+            plt.close()
 
 
 def run_spark(master: str, net_id: str, base: str, outdir: str):
     spark = build_spark(master, f"dsan6000-problem2-{net_id}")
-
     timeline_df = parse_logs_to_timeline(spark, base)
-    # 拉到 pandas 做统计与绘图
     timeline_pdf = timeline_df.toPandas()
-
     write_outputs_and_plots(timeline_pdf, outdir)
-
     spark.stop()
 
 
 def regenerate_from_csv(outdir: str):
-    """
-    --skip-spark 模式：在已有 CSV 的基础上快速重绘图和 stats。
-    需要：problem2_timeline.csv 存在。
-    """
     timeline_csv = os.path.join(outdir, "problem2_timeline.csv")
     if not os.path.exists(timeline_csv):
         raise FileNotFoundError(
             f"--skip-spark 需要先存在 {timeline_csv}。请先跑一次 Spark 再使用 --skip-spark。"
         )
     tl = pd.read_csv(timeline_csv)
-    tl["start_time"] = pd.to_datetime(tl["start_time"])
-    tl["end_time"] = pd.to_datetime(tl["end_time"])
-
+    if not tl.empty:
+        tl["start_time"] = pd.to_datetime(tl["start_time"], errors="coerce")
+        tl["end_time"] = pd.to_datetime(tl["end_time"], errors="coerce")
     write_outputs_and_plots(tl, outdir)
 
 
@@ -210,23 +256,24 @@ def main():
     parser = argparse.ArgumentParser(description="Problem 2: Cluster Usage Analysis")
     parser.add_argument("master", nargs="?", default="local[*]",
                         help="Spark master URL, e.g., local[*] or spark://HOST:7077")
-    parser.add_argument("--net-id", required=False, default="NETID",
-                        help="Your NetID for Spark app naming")
-    parser.add_argument("--input", required=False, default="file://$(pwd)/data/sample",
-                        help="Base input directory (e.g., file://$(pwd)/data/sample or s3a://bucket/path)")
-    parser.add_argument("--outdir", required=False, default="data/output",
-                        help="Output directory")
-    parser.add_argument("--skip-spark", action="store_true", help="Skip Spark: regenerate plots & stats from CSVs")
-
+    parser.add_argument("--net-id", default="NETID", help="Your NetID for Spark app naming")
+    parser.add_argument("--input", default=None,
+                        help="Base directory containing application_* subfolders (local or file:// or hdfs://). "
+                             "If omitted, defaults to file://$PWD/data/sample")
+    parser.add_argument("--outdir", default="data/output", help="Output directory")
+    parser.add_argument("--skip-spark", action="store_true",
+                        help="Regenerate plots & stats from existing CSVs without Spark")
     args = parser.parse_args()
+
+    # 默认输入指向 sample
+    if args.input is None:
+        args.input = f"file://{os.getcwd()}/data/sample"
 
     ensure_outdir(args.outdir)
 
     if args.skip_spark:
         regenerate_from_csv(args.outdir)
     else:
-        # 注意：不要在 Python 中让 shell 展开 $(pwd)，直接把原样字符串传给 Spark 即可。
-        # 在 Bash 中使用时用引号包裹： "file://$(pwd)/data/sample"
         run_spark(args.master, args.net_id, args.input, args.outdir)
 
 
