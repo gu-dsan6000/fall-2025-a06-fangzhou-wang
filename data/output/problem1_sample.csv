@@ -1,0 +1,11 @@
+log_entry,log_level
+17/03/29 10:03:25 INFO executor.Executor: Running task 16.0 in stage 6.0 (TID 117),INFO
+17/03/29 10:07:32 INFO netty.NettyBlockTransferService: Server created on 51182,INFO
+17/03/29 10:11:14 INFO executor.Executor: Running task 14.0 in stage 2.0 (TID 35),INFO
+"17/03/29 10:03:15 INFO Configuration.deprecation: mapred.task.id is deprecated. Instead, use mapreduce.task.attempt.id",INFO
+17/03/29 10:04:52 INFO broadcast.TorrentBroadcast: Started reading broadcast variable 2,INFO
+17/03/29 10:07:49 INFO storage.ShuffleBlockFetcherIterator: Started 0 remote fetches in 7 ms,INFO
+"17/03/29 10:02:41 INFO spark.SecurityManager: Changing modify acls to: yarn,curi",INFO
+"17/03/29 10:04:52 INFO storage.MemoryStore: Block broadcast_0 stored as values in memory (estimated size 281.6 KB, free 312.2 KB)",INFO
+17/03/29 10:04:57 INFO executor.CoarseGrainedExecutorBackend: Got assigned task 48,INFO
+17/03/29 10:11:14 INFO executor.CoarseGrainedExecutorBackend: Got assigned task 35,INFO
